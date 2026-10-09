@@ -12,9 +12,9 @@ LibraryIQ takes the routine part. Staff ask in a chat; the agent answers instant
 
 | Part | What it does | Stage |
 |---|---|---|
-| Article finding | From a DOI, a PubMed ID or a typed citation: identify the article, check access, return the link or raise a request | First |
-| Literature search | Find and summarise relevant papers, with citations | Next |
-| Subscription use and renewals | Answer questions such as which subscriptions renew soon and are barely used | Next |
+| 1. Article finding | From a DOI, a PubMed ID or a typed citation: identify the article, check access, return the link or raise a request | First |
+| 2. Literature search | Find and summarise relevant papers, with citations | Next |
+| 3. Subscription use and renewals | Answer questions such as which subscriptions renew soon and are barely used | Next |
 
 ## User flow
 
@@ -38,9 +38,9 @@ The other two parts (next) start from the same chat:
 ```mermaid
 flowchart TD
   Q["Question in chat"] --> R{"What is it about?"}
-  R -->|"An article"| A1["Article finding flow above"]
-  R -->|"A topic"| L1["Search PubMed and summarise the best matches, with citations"]
-  R -->|"Subscriptions"| S1["Run a fixed, read-only query on subscription and usage data"]
+  R -->|"An article"| A1["Part 1: article finding flow above"]
+  R -->|"A topic"| L1["Part 2: search PubMed and Europe PMC, summarise the best matches, with citations"]
+  R -->|"Subscriptions"| S1["Part 3: run a fixed, read-only query on subscription and usage data"]
   L1 --> L2["Offer to find or request any article from the results"]
   S1 --> S2["Answer with a table and its data source"]
 ```
@@ -51,11 +51,12 @@ flowchart TD
 flowchart TB
   U["Staff<br/>Microsoft Teams"] --> AG["Agent<br/>Agent Framework, Python<br/>hosted in Microsoft Foundry"]
   AG --> MODEL["Language model<br/>Foundry"]
-  AG --> PUB["Public lookups<br/>Crossref, PubMed, Unpaywall"]
-  AG --> LR["Library link resolver<br/>access check"]
-  AG --> DB[("Database<br/>requests, decisions, audit")]
-  AG --> MAIL["Email notification<br/>alerts and outcomes"]
-  AG --> SUB[("Subscription and usage data<br/>next stage")]
+  AG --> PUB["Public lookups<br/>Crossref, PubMed, Unpaywall<br/>Part 1"]
+  AG --> LR["EBSCO Full Text Finder<br/>LinkIQ API: access check<br/>Part 1"]
+  AG --> LIT["Literature sources<br/>PubMed, Europe PMC<br/>Part 2, next"]
+  AG --> DB[("Azure SQL<br/>requests, decisions, audit")]
+  AG --> MAIL["Email notifier<br/>alerts and outcomes"]
+  AG --> SUB[("Subscription and usage data<br/>COUNTER reports, renewal dates<br/>Part 3, next")]
   AG -.-> OBS["Application Insights<br/>traces and logs"]
   LIBN["Librarian"] --> LIB["Librarian approval page<br/>web app, Entra sign-in"]
   LIB --> DB
@@ -68,10 +69,10 @@ Inside the agent, the language model only reads the request and chooses a tool. 
 flowchart TB
   H["Agent host"] --> AG["Agent<br/>instructions and model client"]
   AG --> MW["Audit middleware<br/>logs every tool call"]
-  MW --> T1["find_article<br/>identify, then check access"]
-  MW --> T2["request_article<br/>create a pending request"]
-  MW --> T3["search_literature<br/>PubMed search with citations<br/>next stage"]
-  MW --> T4["subscription_insights<br/>fixed, read-only queries<br/>next stage"]
+  MW --> T1["find_article - Part 1<br/>identify, then check access"]
+  MW --> T2["request_article - Part 1<br/>create a pending request"]
+  MW --> T3["search_literature - Part 2<br/>search with citations<br/>next stage"]
+  MW --> T4["subscription_insights - Part 3<br/>fixed, read-only queries<br/>next stage"]
   T1 --> CORE["Plain Python core<br/>parsing, lookups, access check, search"]
   T3 --> CORE
   T2 --> STORE["Request store and approval rules"]
