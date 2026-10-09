@@ -1,0 +1,6 @@
+# Local-only material.
+docs/
+.github/
+
+# macOS
+.DS_Store
