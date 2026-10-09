@@ -106,7 +106,27 @@ The demo runs against free public services and synthetic data. Systems that need
 
 ## Status
 
-Early build. A private, end-to-end environment is defined in [infra/private/](infra/private/) and development happens on a jump VM inside it; the agent code is next. A Get Started guide will follow once there is something to run.
+Part 1 (article finding) works end to end on a local model, with a stand-in for the library access check. A private, end-to-end Azure environment is defined in [infra/private/](infra/private/); deploying the agent there is next.
+
+## Run locally
+
+Needs Python 3.13, [uv](https://docs.astral.sh/uv/) and [Ollama](https://ollama.com) with a tool-calling model.
+
+```bash
+ollama pull qwen2.5:7b
+cp .env.example .env          # set LIBRARYIQ_CONTACT_EMAIL; it is sent to Crossref, PubMed and Unpaywall
+uv sync
+uv run python -m libraryiq.cli    # chat in the terminal
+uv run python -m libraryiq.main   # host it on http://localhost:8088 (Responses API)
+uv run pytest
+```
+
+```bash
+curl -s localhost:8088/responses -H "Content-Type: application/json" \
+  -d '{"input": "Find 10.1056/NEJMoa2034577 for me"}'
+```
+
+The access check, email and request store are stand-ins (a sample journal list, a simulated notifier, SQLite). Crossref, PubMed and Unpaywall are called live.
 
 ## Principles
 

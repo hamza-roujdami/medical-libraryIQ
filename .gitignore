@@ -2,5 +2,16 @@
 docs/
 .github/
 
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local runtime files
+.env
+*.db
+
 # macOS
 .DS_Store
