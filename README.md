@@ -92,7 +92,7 @@ flowchart TB
 
 ## Status
 
-Early build. The dev infrastructure is defined in [infra/](infra/); the agent code is next. A Get Started guide will follow once there is something to run.
+Early build. A private, end-to-end environment is defined in [infra/private/](infra/private/) and development happens on a jump VM inside it; the agent code is next. A Get Started guide will follow once there is something to run.
 
 ## Principles
 
