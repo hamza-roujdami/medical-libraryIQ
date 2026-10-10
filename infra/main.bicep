@@ -1,45 +1,57 @@
 targetScope = 'resourceGroup'
 
-@description('Short prefix used in resource names.')
-@maxLength(6)
-param namePrefix string = 'libiq'
+@description('Foundry (AI Services) account name; also its custom subdomain.')
+param accountName string
 
+@description('API Management instance name.')
+param apimName string
+
+param projectName string = 'libiq-project'
 param location string = resourceGroup().location
 
-@description('Object ID of the person or identity that deploys. Gets data-plane access to the Foundry project and the registry, and is the SQL Entra admin.')
-param principalId string
-
-@description('Sign-in name (UPN) of the deployer; used as the SQL Entra admin login.')
-param principalName string
-
-@allowed(['User', 'ServicePrincipal'])
-param principalType string = 'User'
-
-param modelName string = 'gpt-5.4-mini'
-param modelVersion string = '2026-03-17'
+param modelName string = 'gpt-6-sol'
+param modelVersion string = '2026-09-22'
 
 @description('Model capacity in thousands of tokens per minute.')
-param modelCapacity int = 50
+param modelCapacity int = 100
+
+@description('Object ID of the person who deploys and calls the model directly.')
+param principalId string
+
+@description('Publisher contact email shown on the API Management instance.')
+param publisherEmail string
+
+@description('Create the role assignments. Turn off when they already exist (the first deployment made them by CLI).')
+param createRoleAssignments bool = true
+
+@description('Web app that hosts the library tools service.')
+param webAppName string
+
+@description('Region for the web app plan, if the main region has no capacity.')
+param appLocation string = resourceGroup().location
+
+@description('App Service plan size.')
+param appPlanSku string = 'B1'
+
+@description('Contact address the tools service sends to Crossref, PubMed and Unpaywall.')
+param contactEmail string
+
+@secure()
+@description('Shared key the gateway sends to the tools service. The service rejects calls without it.')
+param backendKey string
+
+@description('Turn on the eval state and reset endpoints of the tools service. Dev only.')
+param enableTestEndpoints bool = false
 
 param tags object = {
   project: 'libraryiq'
   environment: 'dev'
 }
 
-var token = uniqueString(subscription().id, resourceGroup().id)
-var accountName = '${namePrefix}-ai-${token}'
-var projectName = '${namePrefix}-project'
+// Built-in role: Azure AI User (call models and use the project with Entra sign-in).
+var azureAiUser = '53ca6127-db72-4b80-b1b0-d745d6d5456d'
 
-// Built-in role definition IDs.
-var roles = {
-  acrPull: '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-  acrPush: '8311e382-0749-4cb8-b61a-304f252e45ec'
-  foundryProjectManager: 'eadc314b-1a2d-4efa-be10-5d325db5065e'
-  foundryUser: '53ca6127-db72-4b80-b1b0-d745d6d5456d'
-  logAnalyticsDataReader: '3b03c2da-16b3-4a49-8834-0f8130efdd3b'
-}
-
-// Foundry account, project and model. Entra-only: local (key) auth is off.
+// Foundry account, project and model. Public endpoint, Entra-only (key auth off).
 resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: accountName
   location: location
@@ -89,170 +101,239 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   dependsOn: [model]
 }
 
-// Hosting environment for hosted agents (as in the official azd starter).
-resource capabilityHost 'Microsoft.CognitiveServices/accounts/capabilityHosts@2025-10-01-preview' = {
-  parent: account
-  name: 'agents'
-  properties: {
-    capabilityHostKind: 'Agents'
-    enablePublicHostingEnvironment: true
+// API Management as the AI gateway: model traffic, and later the MCP servers.
+resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
+  name: apimName
+  location: location
+  tags: tags
+  sku: {
+    name: 'BasicV2'
+    capacity: 1
   }
-  dependsOn: [project]
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    publisherEmail: publisherEmail
+    publisherName: 'LibraryIQ dev'
+  }
 }
 
-// The project identity calls the model through the account.
-resource projectFoundryUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource foundryBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
+  parent: apim
+  name: 'foundry'
+  properties: {
+    url: 'https://${accountName}.cognitiveservices.azure.com/openai/v1'
+    protocol: 'http'
+    description: 'Foundry ${modelName}'
+  }
+}
+
+resource foundryApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
+  parent: apim
+  name: 'foundry-openai'
+  properties: {
+    displayName: 'Foundry models (OpenAI v1)'
+    path: 'openai/v1'
+    protocols: ['https']
+    subscriptionRequired: true
+    subscriptionKeyParameterNames: {
+      header: 'api-key'
+      query: 'api-key'
+    }
+    serviceUrl: 'https://placeholder.invalid'
+  }
+}
+
+resource chatCompletions 'Microsoft.ApiManagement/service/apis/operations@2024-05-01' = {
+  parent: foundryApi
+  name: 'chat-completions'
+  properties: {
+    displayName: 'Chat completions'
+    method: 'POST'
+    urlTemplate: '/chat/completions'
+  }
+}
+
+resource responses 'Microsoft.ApiManagement/service/apis/operations@2024-05-01' = {
+  parent: foundryApi
+  name: 'responses'
+  properties: {
+    displayName: 'Responses'
+    method: 'POST'
+    urlTemplate: '/responses'
+  }
+}
+
+resource foundryApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
+  parent: foundryApi
+  name: 'policy'
+  properties: {
+    format: 'rawxml'
+    value: loadTextContent('policies/foundry-openai.xml')
+  }
+  dependsOn: [foundryBackend]
+}
+
+resource devSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
+  parent: apim
+  name: 'libraryiq-dev'
+  properties: {
+    scope: foundryApi.id
+    displayName: 'libraryiq-dev'
+    state: 'active'
+  }
+}
+
+// The tools service: the library tools as a native MCP server, hosted on a small Linux web app.
+// Code is deployed separately (see README).
+resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
+  name: 'plan-${webAppName}'
+  location: appLocation
+  tags: tags
+  kind: 'linux'
+  sku: { name: appPlanSku }
+  properties: { reserved: true }
+}
+
+resource site 'Microsoft.Web/sites@2024-04-01' = {
+  name: webAppName
+  location: appLocation
+  tags: tags
+  kind: 'app,linux'
+  properties: {
+    serverFarmId: plan.id
+    httpsOnly: true
+    siteConfig: {
+      linuxFxVersion: 'PYTHON|3.13'
+      appCommandLine: 'python -m uvicorn libraryiq.server:create_app --factory --host 0.0.0.0 --port 8000'
+      alwaysOn: true
+      minTlsVersion: '1.2'
+      ftpsState: 'Disabled'
+      appSettings: [
+        { name: 'SCM_DO_BUILD_DURING_DEPLOYMENT', value: 'true' }
+        { name: 'WEBSITES_PORT', value: '8000' }
+        { name: 'LIBRARYIQ_CONTACT_EMAIL', value: contactEmail }
+        { name: 'LIBRARYIQ_DATABASE_PATH', value: '/home/libraryiq.db' }
+        { name: 'LIBRARYIQ_BACKEND_KEY', value: backendKey }
+        { name: 'LIBRARYIQ_ENABLE_TEST_ENDPOINTS', value: string(enableTestEndpoints) }
+      ]
+    }
+  }
+}
+
+resource backendKeyValue 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = {
+  parent: apim
+  name: 'libraryiq-backend-key'
+  properties: {
+    displayName: 'libraryiq-backend-key'
+    value: backendKey
+    secret: true
+  }
+}
+
+// The tools service is a native MCP server (stateless, JSON responses). The gateway fronts it as a
+// plain API at <gateway>/library/mcp, so the subscription key, rate limit and backend key apply.
+resource libraryApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
+  parent: apim
+  name: 'library'
+  properties: {
+    displayName: 'LibraryIQ library tools (MCP)'
+    path: 'library'
+    protocols: ['https']
+    subscriptionRequired: true
+    subscriptionKeyParameterNames: {
+      header: 'api-key'
+      query: 'api-key'
+    }
+    serviceUrl: 'https://${site.properties.defaultHostName}'
+  }
+}
+
+resource mcpPost 'Microsoft.ApiManagement/service/apis/operations@2024-05-01' = {
+  parent: libraryApi
+  name: 'mcp-post'
+  properties: {
+    displayName: 'MCP request'
+    method: 'POST'
+    urlTemplate: '/mcp'
+  }
+}
+
+resource mcpGet 'Microsoft.ApiManagement/service/apis/operations@2024-05-01' = {
+  parent: libraryApi
+  name: 'mcp-get'
+  properties: {
+    displayName: 'MCP stream (not offered by the server)'
+    method: 'GET'
+    urlTemplate: '/mcp'
+  }
+}
+
+resource libraryApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
+  parent: libraryApi
+  name: 'policy'
+  properties: {
+    format: 'rawxml'
+    value: loadTextContent('policies/library-tools.xml')
+  }
+  dependsOn: [backendKeyValue]
+}
+
+// One key for the agent: model API and library tools.
+resource agentSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
+  parent: apim
+  name: 'libraryiq-agent'
+  properties: {
+    scope: '${apim.id}/apis'
+    displayName: 'libraryiq-agent'
+    state: 'active'
+  }
+}
+
+// Demo identities: the gateway tells the tools who is calling from the subscription name.
+resource requesterSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
+  parent: apim
+  name: 'demo-requester'
+  properties: {
+    scope: '${apim.id}/apis'
+    displayName: 'demo-requester'
+    state: 'active'
+  }
+}
+
+resource librarianSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
+  parent: apim
+  name: 'demo-librarian'
+  properties: {
+    scope: '${apim.id}/apis'
+    displayName: 'demo-librarian'
+    state: 'active'
+  }
+}
+
+// The gateway identity calls the model; the deployer can also call it directly.
+resource gatewayCallsModel 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createRoleAssignments) {
   scope: account
-  name: guid(account.id, project.id, roles.foundryUser)
+  name: guid(account.id, apim.id, azureAiUser)
   properties: {
-    principalId: project.identity.principalId
+    principalId: apim.identity.principalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.foundryUser)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', azureAiUser)
   }
 }
 
-resource deployerProjectManager 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: project
-  name: guid(project.id, principalId, roles.foundryProjectManager)
+resource deployerCallsModel 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createRoleAssignments) {
+  scope: account
+  name: guid(account.id, principalId, azureAiUser)
   properties: {
     principalId: principalId
-    principalType: principalType
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.foundryProjectManager)
+    principalType: 'User'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', azureAiUser)
   }
 }
 
-module logs 'br/public:avm/res/operational-insights/workspace:0.16.1' = {
-  name: 'logs'
-  params: {
-    name: 'log-${namePrefix}-${token}'
-    location: location
-    tags: tags
-    dataRetention: 30
-    roleAssignments: [
-      {
-        // Lets the project read traces for evaluations.
-        principalId: project.identity.principalId
-        principalType: 'ServicePrincipal'
-        roleDefinitionIdOrName: roles.logAnalyticsDataReader
-      }
-    ]
-  }
-}
-
-module appInsights 'br/public:avm/res/insights/component:0.8.0' = {
-  name: 'appInsights'
-  params: {
-    name: 'appi-${namePrefix}-${token}'
-    location: location
-    tags: tags
-    workspaceResourceId: logs.outputs.resourceId
-    kind: 'web'
-    applicationType: 'web'
-  }
-}
-
-module registry 'br/public:avm/res/container-registry/registry:0.13.1' = {
-  name: 'registry'
-  params: {
-    name: 'cr${namePrefix}${token}'
-    location: location
-    tags: tags
-    acrSku: 'Basic'
-    publicNetworkAccess: 'Enabled'
-    networkRuleSetDefaultAction: 'Allow'
-    azureADAuthenticationAsArmPolicyStatus: 'enabled'
-    roleAssignments: [
-      {
-        // The project identity pulls the agent image.
-        principalId: project.identity.principalId
-        principalType: 'ServicePrincipal'
-        roleDefinitionIdOrName: roles.acrPull
-      }
-      {
-        principalId: principalId
-        principalType: principalType
-        roleDefinitionIdOrName: roles.acrPush
-      }
-    ]
-  }
-}
-
-module sql 'br/public:avm/res/sql/server:0.22.1' = {
-  name: 'sql'
-  params: {
-    name: 'sql-${namePrefix}-${token}'
-    location: location
-    tags: tags
-    publicNetworkAccess: 'Enabled'
-    administrators: {
-      azureADOnlyAuthentication: true
-      login: principalName
-      sid: principalId
-      principalType: principalType == 'User' ? 'User' : 'Application'
-      tenantId: tenant().tenantId
-    }
-    databases: [
-      {
-        name: 'libraryiq'
-        availabilityZone: -1
-        sku: {
-          name: 'GP_S_Gen5_1'
-          tier: 'GeneralPurpose'
-        }
-        autoPauseDelay: 60
-        minCapacity: '0.5'
-        maxSizeBytes: 2147483648
-      }
-    ]
-  }
-}
-
-// Project connections that hosted agents use for image pull and telemetry.
-resource registryConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview' = {
-  parent: project
-  name: 'registry'
-  properties: {
-    category: 'ContainerRegistry'
-    target: registry.outputs.loginServer
-    authType: 'ManagedIdentity'
-    isSharedToAll: true
-    credentials: {
-      clientId: project.identity.principalId
-      resourceId: registry.outputs.resourceId
-    }
-    metadata: {
-      ResourceId: registry.outputs.resourceId
-    }
-  }
-}
-
-resource appInsightsConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview' = {
-  parent: project
-  name: 'appinsights'
-  properties: {
-    category: 'AppInsights'
-    target: appInsights.outputs.resourceId
-    authType: 'ApiKey'
-    isSharedToAll: true
-    credentials: {
-      key: appInsights.outputs.connectionString
-    }
-    metadata: {
-      ApiType: 'Azure'
-      ResourceId: appInsights.outputs.resourceId
-    }
-  }
-}
-
-output accountName string = account.name
-output projectName string = project.name
-output projectEndpoint string = project.properties.endpoints['AI Foundry API']
-output projectPrincipalId string = project.identity.principalId
+output foundryProjectEndpoint string = project.properties.endpoints['AI Foundry API']
 output modelDeployment string = model.name
-output registryName string = registry.outputs.name
-output registryLoginServer string = registry.outputs.loginServer
-output sqlServerName string = sql.outputs.name
-output sqlServerFqdn string = sql.outputs.fullyQualifiedDomainName
-output sqlDatabase string = 'libraryiq'
-output appInsightsName string = appInsights.outputs.name
-output logAnalyticsName string = logs.outputs.name
+output gatewayUrl string = apim.properties.gatewayUrl
+output gatewayModelUrl string = '${apim.properties.gatewayUrl}/openai/v1'
+output toolsMcpUrl string = '${apim.properties.gatewayUrl}/library/mcp'
+output toolsWebApp string = site.properties.defaultHostName

@@ -1,0 +1,5 @@
+mcp>=1.24,<2
+uvicorn>=0.32
+httpx>=0.28,<1
+pydantic>=2.9
+pydantic-settings>=2.6
