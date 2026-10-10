@@ -1,4 +1,4 @@
-from libraryiq.core.models import Article
+from libraryiq.lookup import Article
 
 
 class FakeLookup:

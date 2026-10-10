@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
-from typing import Protocol
 
-from libraryiq.core.models import AccessLink, AccessResult, Article
+from pydantic import BaseModel, Field
+
+from libraryiq.lookup import Article
 
 SAMPLE_SOURCE = "Sample access list (demo, not a real subscription)"
 
@@ -18,8 +19,16 @@ SAMPLE_SUBSCRIBED_JOURNALS = (
 )
 
 
-class AccessChecker(Protocol):
-    async def check(self, article: Article) -> AccessResult: ...
+class AccessLink(BaseModel):
+    category: str
+    text: str
+    url: str
+
+
+class AccessResult(BaseModel):
+    subscribed: bool
+    links: list[AccessLink] = Field(default_factory=list)
+    source: str
 
 
 def _normalise(title: str) -> str:
@@ -27,7 +36,10 @@ def _normalise(title: str) -> str:
 
 
 class SampleAccessChecker:
-    """Returns data in the shape of a link resolver response: links with a category and a URL."""
+    """Stand-in for the library's link resolver, returning links with a category and a URL.
+
+    Replace with a client for the real service; it only needs the same `check` method.
+    """
 
     def __init__(self, journals: tuple[str, ...] = SAMPLE_SUBSCRIBED_JOURNALS) -> None:
         self._journals = {_normalise(j) for j in journals}

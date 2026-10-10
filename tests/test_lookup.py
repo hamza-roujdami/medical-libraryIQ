@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from libraryiq.core.lookup import LookupFailed, PublicLookup
+from libraryiq.lookup import LookupFailed, PublicLookup
 
 CROSSREF_WORK = {
     "message": {

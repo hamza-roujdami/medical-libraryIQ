@@ -8,7 +8,7 @@ _DOI = re.compile(r"(10\.\d{4,9}/[^\s\"<>]+)", re.IGNORECASE)
 _PMID_LABELLED = re.compile(r"\bpmid\s*[:#]?\s*(\d{1,9})\b", re.IGNORECASE)
 _PUBMED_URL = re.compile(r"pubmed\.ncbi\.nlm\.nih\.gov/(\d{1,9})", re.IGNORECASE)
 _PMID_BARE = re.compile(r"^\d{5,9}$")
-_TRAILING = ".,;:)]}>\"'"
+_TRAILING = ".,;:!?]}>\"'"
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,10 @@ class Identifier:
 
 
 def clean_doi(raw: str) -> str:
-    return raw.strip().rstrip(_TRAILING).lower()
+    doi = raw.strip().rstrip(_TRAILING)
+    while doi.endswith(")") and doi.count("(") < doi.count(")"):
+        doi = doi[:-1].rstrip(_TRAILING)
+    return doi.lower()
 
 
 def parse_identifier(text: str) -> Identifier:

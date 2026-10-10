@@ -1,29 +1,36 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
 from urllib.parse import quote
 
 import httpx
-
-from libraryiq.core.models import Article, FreeCopy
+from pydantic import BaseModel, Field
 
 CROSSREF = "https://api.crossref.org"
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 UNPAYWALL = "https://api.unpaywall.org/v2"
 
 
+class Article(BaseModel):
+    title: str
+    journal: str | None = None
+    issn: list[str] = Field(default_factory=list)
+    year: int | None = None
+    authors: list[str] = Field(default_factory=list)
+    doi: str | None = None
+    pmid: str | None = None
+    source: str
+
+
+class FreeCopy(BaseModel):
+    url: str
+    version: str | None = None
+    license: str | None = None
+    source: str = "Unpaywall"
+
+
 class LookupFailed(Exception):
     """A public lookup service could not be reached or returned an error."""
-
-
-class ArticleLookup(Protocol):
-    async def by_doi(self, doi: str) -> Article | None: ...
-
-    async def by_pmid(self, pmid: str) -> Article | None: ...
-
-    async def by_citation(self, text: str, limit: int = 3) -> list[Article]: ...
-
-    async def free_copy(self, doi: str) -> FreeCopy | None: ...
 
 
 def make_http_client(contact_email: str) -> httpx.AsyncClient:

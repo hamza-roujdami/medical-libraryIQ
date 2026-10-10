@@ -1,9 +1,9 @@
 import pytest
 
-from libraryiq.core.access import SampleAccessChecker
-from libraryiq.core.notify import SimulatedNotifier
-from libraryiq.core.service import Services
-from libraryiq.core.store import SqliteRequestStore
+from fakes import FakeLookup
+from libraryiq.access import SampleAccessChecker
+from libraryiq.orders import SimulatedNotifier, SqliteRequestStore
+from libraryiq.tools import LibraryTools
 
 
 @pytest.fixture
@@ -12,16 +12,15 @@ def notifier():
 
 
 @pytest.fixture
-def make_services(tmp_path, notifier):
-    def _make(lookup):
-        return Services(
-            lookup=lookup,
-            access=SampleAccessChecker(),
-            store=SqliteRequestStore(tmp_path / "test.db"),
-            notifier=notifier,
+def make_tools(tmp_path, notifier):
+    def _make(lookup=None):
+        return LibraryTools(
+            lookup or FakeLookup(),
+            SampleAccessChecker(),
+            SqliteRequestStore(tmp_path / "test.db"),
+            notifier,
             librarian_email="librarian@example.org",
             approval_base_url="http://localhost:8000",
-            requester="staff@example.org",
         )
 
     return _make

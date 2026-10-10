@@ -1,6 +1,6 @@
 import pytest
 
-from libraryiq.core.identifiers import Identifier, parse_identifier
+from libraryiq.identifiers import Identifier, parse_identifier
 
 
 @pytest.mark.parametrize(
@@ -9,6 +9,8 @@ from libraryiq.core.identifiers import Identifier, parse_identifier
         ("10.1038/nature12373", Identifier("doi", "10.1038/nature12373")),
         ("doi:10.1056/NEJMoa2034577", Identifier("doi", "10.1056/nejmoa2034577")),
         ("https://doi.org/10.1000/xyz123.", Identifier("doi", "10.1000/xyz123")),
+        ("Can you get me 10.1056/NEJMoa2034577?", Identifier("doi", "10.1056/nejmoa2034577")),
+        ("find 10.1056/NEJMoa2034577!", Identifier("doi", "10.1056/nejmoa2034577")),
         (
             "Please find (10.1016/S0140-6736(20)30183-5).",
             Identifier("doi", "10.1016/s0140-6736(20)30183-5"),
