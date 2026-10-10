@@ -98,7 +98,7 @@ Example:
 | Language | Python |
 | Agent framework | [Microsoft Agent Framework](https://learn.microsoft.com/agent-framework/) |
 | Model | A language model reached only through an AI gateway; the model route is to be confirmed |
-| Tools | Small single-purpose tools, served over MCP through the gateway or run in the agent |
+| Tools | Agent Framework function tools that run inside the agent; each one is small and does one thing |
 | Data | SQLite for local development; the production store is to be confirmed |
 | Hosting | To be confirmed with the customer's platform team |
 | Observability | An audit log of every tool call; tracing is planned |
@@ -119,19 +119,18 @@ The demo runs against free public services and synthetic data. Systems that need
 
 ## Status
 
-Part 1 (article finding) works end to end for two people: a requester and a librarian. The requester finds an article or raises a request and can ask for its status. The librarian lists pending requests and approves or declines each one, after confirming in the chat. The agent can never decide on its own. The access check, notifications and the request store are stand-ins. The model and the tools are reached through an AI gateway ([infra/](infra/)), which also tells the tools who is calling. Still to build: Teams as the channel, alerts to the librarian and requester, and Parts 2 and 3. Running the agent itself in Azure (as a hosted agent) is next.
+Part 1 (article finding) works end to end for two people: a requester and a librarian. The requester finds an article or raises a request and can ask for its status. The librarian lists pending requests and approves or declines each one, after confirming in the chat. The agent can never decide on its own. The access check, notifications and the request store are stand-ins. The model is reached through an AI gateway ([infra/](infra/)). Still to build: Teams as the channel, alerts to the librarian and requester, and Parts 2 and 3. Running the agent itself in Azure (as a hosted agent) is next.
 
 ## Run locally
 
-Needs Python 3.13, [uv](https://docs.astral.sh/uv/) and an AI gateway (API Management) in front of a chat model deployment, as in [infra/](infra/). The agent never calls the model directly, and it gets its tools only from an MCP server.
+Needs Python 3.13, [uv](https://docs.astral.sh/uv/) and an AI gateway (API Management) in front of a chat model deployment, as in [infra/](infra/). The agent never calls the model directly.
 
 ```bash
-cp .env.example .env          # set the gateway URL and key, the model, and the tools URL
+cp .env.example .env          # set the gateway URL and key, the model and a contact email
 uv sync
-uv run python -m libraryiq.server # the tools, as an MCP server on http://localhost:8000/mcp
-uv run python -m libraryiq.cli    # chat in the terminal (set LIBRARYIQ_TOOLS_MCP_URL to the tools URL)
+uv run python -m libraryiq.cli    # chat in the terminal (add `librarian` to chat as the librarian)
 uv run python -m libraryiq.ui     # chat UI on http://localhost:8080 with a requester and a librarian agent
-uv run python -m libraryiq.main   # host the agent on http://localhost:8088 (Responses API)
+uv run python -m libraryiq.main   # host the requester agent on http://localhost:8088 (Responses API)
 uv run pytest
 ```
 
@@ -140,11 +139,11 @@ curl -s localhost:8088/responses -H "Content-Type: application/json" \
   -d '{"input": "Find 10.1056/NEJMoa2034577 for me"}'
 ```
 
-The access check, email and request store are stand-ins (a sample journal list, a simulated notifier, SQLite). Crossref, PubMed and Unpaywall are called live. Use the gateway's `/library/mcp` address as the tools URL once [infra/](infra/) is deployed, or `http://localhost:8000/mcp` to run the tools locally.
+The access check, email and request store are stand-ins (a sample journal list, a simulated notifier, SQLite). Crossref, PubMed and Unpaywall are called live.
 
 ### Try the two-user demo
 
-Set `LIBRARYIQ_LIBRARIAN_API_KEY` (the librarian's own gateway key), start the chat UI, and open it in two browser windows. Pick **LibraryIQ requester** in one and **LibraryIQ librarian** in the other.
+Start the chat UI and open it in two browser windows. Pick **LibraryIQ requester** in one and **LibraryIQ librarian** in the other. Both agents share one request store, so a request raised by the requester shows up for the librarian.
 
 1. Requester: ask for an article the library does not hold, for example `10.1093/eurheartj/ehaa944`, and agree to send a request.
 2. Librarian: "What requests are waiting?", then "Approve it". Confirm in the prompt that appears.
@@ -152,18 +151,18 @@ Set `LIBRARYIQ_LIBRARIAN_API_KEY` (the librarian's own gateway key), start the c
 
 The librarian can also check what is available, for example "Do we have 10.1056/NEJMoa2034577?".
 
-Each key belongs to its own gateway subscription, which is how the gateway tells the tools who is calling and what role they have. Only the librarian can list or decide requests, and the decision is applied only after the librarian confirms it.
+The agent for each person is built with that person's identity and role. A requester is never given the librarian's tools, and the decision tool pauses for the librarian's confirmation before it runs. In the demo the two people are set in `.env`; in production the identity would come from the signed-in user.
 
 ## Code layout
 
 | File | What it holds |
 |---|---|
-| `src/libraryiq/agent.py` | The agent: instructions, model client, connection to the tools |
-| `src/libraryiq/ui.py` | A local chat UI (Agent Framework DevUI) with the requester and the librarian agents |
-| `src/libraryiq/server.py` | The tools server (MCP over HTTP), its settings and the gateway key check |
-| `src/libraryiq/tools.py` | The five tools and the rules behind them, including who may do what |
+| `src/libraryiq/agent.py` | The agent: settings, instructions per role, model client |
+| `src/libraryiq/tools.py` | The five tools as Agent Framework function tools, and the rules behind them, including who may do what |
 | `src/libraryiq/lookup.py`, `access.py`, `orders.py` | Public lookups, the access check (stand-in), and request records with notifications (stand-in) |
-| `evals/run_part1.py` | Scenarios graded in code, run against the real agent and tools |
+| `src/libraryiq/audit.py` | Logs every tool call |
+| `src/libraryiq/ui.py`, `cli.py`, `main.py` | Local chat UI with both agents, terminal chat, and the hosted agent |
+| `evals/run_part1.py` | Scenarios graded in code, run against the real agents and model |
 
 ## Principles
 
