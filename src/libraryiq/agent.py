@@ -1,28 +1,51 @@
 from __future__ import annotations
 
-from typing import Literal
-
-from agent_framework import Agent, MCPStreamableHTTPTool
+from agent_framework import Agent
 from agent_framework_openai import OpenAIChatClient
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from libraryiq.access import SampleAccessChecker
 from libraryiq.audit import AuditMiddleware
-
-Role = Literal["requester", "librarian"]
+from libraryiq.lookup import PublicLookup, make_http_client
+from libraryiq.orders import SimulatedNotifier, SqliteRequestStore
+from libraryiq.tools import Library, User, library_tools
 
 
 class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LIBRARYIQ_", env_file=".env", extra="ignore")
 
-    # The model and the tools are reached only through the AI gateway, never directly.
-    # The key identifies the caller to the gateway, which tells the tools who is asking.
+    # The model is reached only through the AI gateway, never directly.
     gateway_url: str
     gateway_api_key: SecretStr
     model: str
-    tools_mcp_url: str
-    # The librarian's own gateway key, for the librarian agent.
-    librarian_api_key: SecretStr | None = None
+
+    # Sent to Crossref, PubMed and Unpaywall as their requested contact address.
+    contact_email: str
+    librarian_email: str = "librarian@example.org"
+    database_path: str = "libraryiq.db"
+
+    # The two demo people. In production the user comes from the signed-in identity.
+    requester_id: str = "demo.user@example.org"
+    librarian_id: str = "demo.librarian@example.org"
+
+    @property
+    def requester(self) -> User:
+        return User(self.requester_id, "requester")
+
+    @property
+    def librarian(self) -> User:
+        return User(self.librarian_id, "librarian")
+
+
+def open_library(settings: AgentSettings) -> Library:
+    return Library(
+        lookup=PublicLookup(make_http_client(settings.contact_email), settings.contact_email),
+        access=SampleAccessChecker(),
+        store=SqliteRequestStore(settings.database_path),
+        notifier=SimulatedNotifier(),
+        librarian_email=settings.librarian_email,
+    )
 
 
 REQUESTER_INSTRUCTIONS = """\
@@ -66,48 +89,21 @@ Rules:
 - Report only what the tools returned. Keep answers short.
 """
 
-_REQUESTER_TOOLS = ["find_article", "request_article", "get_request_status"]
-_LIBRARIAN_TOOLS = ["find_article", "list_pending_requests", "get_request_status", "decide_request"]
 
-
-def build_agent(settings: AgentSettings, role: Role = "requester") -> Agent:
-    """The agent for a role. Use it as `async with agent:` so the tool connection closes cleanly."""
-    if role == "librarian":
-        if settings.librarian_api_key is None:
-            raise ValueError("Set LIBRARYIQ_LIBRARIAN_API_KEY to run the librarian agent.")
-        key = settings.librarian_api_key.get_secret_value()
-    else:
-        key = settings.gateway_api_key.get_secret_value()
-
+def build_agent(settings: AgentSettings, library: Library, user: User) -> Agent:
+    """The agent for one user: their role decides the instructions and the tools."""
     # Responses API: gpt-6-sol rejects function tools on /chat/completions.
     client = OpenAIChatClient(
         settings.model,
         api_key="unused",
         base_url=settings.gateway_url,
-        default_headers={"api-key": key},
+        default_headers={"api-key": settings.gateway_api_key.get_secret_value()},
     )
-    library_tools = MCPStreamableHTTPTool(
-        "library",
-        settings.tools_mcp_url,
-        static_headers={"api-key": key},
-        load_prompts=False,
-        allowed_tools=_LIBRARIAN_TOOLS if role == "librarian" else _REQUESTER_TOOLS,
-        # The librarian confirms every decision in the chat UI; the model cannot apply one alone.
-        approval_mode={
-            "always_require_approval": ["decide_request"],
-            "never_require_approval": [
-                "find_article",
-                "list_pending_requests",
-                "get_request_status",
-            ],
-        }
-        if role == "librarian"
-        else "never_require",
-    )
+    librarian = user.role == "librarian"
     return Agent(
         client,
-        LIBRARIAN_INSTRUCTIONS if role == "librarian" else REQUESTER_INSTRUCTIONS,
-        name=f"LibraryIQ {role}",
-        tools=[library_tools],
+        LIBRARIAN_INSTRUCTIONS if librarian else REQUESTER_INSTRUCTIONS,
+        name=f"LibraryIQ {user.role}",
+        tools=library_tools(library, user),
         middleware=[AuditMiddleware()],
     )

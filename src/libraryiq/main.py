@@ -4,11 +4,13 @@ import logging
 
 from agent_framework_foundry_hosting import ResponsesHostServer
 
-from libraryiq.agent import AgentSettings, build_agent
+from libraryiq.agent import AgentSettings, build_agent, open_library
 
 
 def create_server() -> ResponsesHostServer:
-    return ResponsesHostServer(agent=build_agent(AgentSettings()), history_source="agent_server")
+    settings = AgentSettings()
+    agent = build_agent(settings, open_library(settings), settings.requester)
+    return ResponsesHostServer(agent=agent, history_source="agent_server")
 
 
 if __name__ == "__main__":

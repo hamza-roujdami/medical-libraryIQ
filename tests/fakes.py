@@ -1,4 +1,5 @@
 from libraryiq.lookup import Article
+from libraryiq.tools import library_tools
 
 
 class FakeLookup:
@@ -22,3 +23,11 @@ class FakeLookup:
 
 def article(doi="10.1000/a.1", journal="The Lancet", pmid=None, title="Synthetic article"):
     return Article(title=title, journal=journal, year=2020, doi=doi, pmid=pmid, source="Crossref")
+
+
+def tools_for(library, user):
+    return {t.name: t for t in library_tools(library, user)}
+
+
+async def call(library, user, name, **arguments):
+    return await tools_for(library, user)[name](**arguments)

@@ -4,19 +4,19 @@ import logging
 
 from agent_framework.devui import serve
 
-from libraryiq.agent import AgentSettings, build_agent
+from libraryiq.agent import AgentSettings, build_agent, open_library
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING, format="%(name)s: %(message)s")
     logging.getLogger("libraryiq").setLevel(logging.INFO)
     settings = AgentSettings()
-    # Local chat UI. Open it in two browser windows: one on the requester agent, one on the
-    # librarian agent. Each agent uses its own gateway key, which is how the gateway tells them apart.
-    entities = [build_agent(settings, "requester")]
-    if settings.librarian_api_key:
-        entities.append(build_agent(settings, "librarian"))
+    # One library shared by both agents, so a request raised by the requester shows up for the librarian.
+    library = open_library(settings)
     serve(
-        entities=entities,
+        entities=[
+            build_agent(settings, library, settings.requester),
+            build_agent(settings, library, settings.librarian),
+        ],
         port=8080,
         auto_open=True,
         auth_enabled=False,  # bound to localhost only

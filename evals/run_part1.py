@@ -1,8 +1,7 @@
-"""Part 1 scenarios run against the real agent, model and tools, all through the AI gateway.
+"""Part 1 scenarios run against the real agents and model (through the AI gateway) and live lookups.
 
-Each scenario is graded in code on tool calls, tool results, the reply and the stored state.
-The stored state is read from the tools service directly (LIBRARYIQ_EVAL_SERVICE_URL), which must
-run with LIBRARYIQ_ENABLE_TEST_ENDPOINTS=true. Run: uv run python evals/run_part1.py [--runs N]
+Each scenario gets a fresh request store and is graded in code on tool calls, tool results, the
+reply and the stored state. Run: uv run python evals/run_part1.py [--runs N]
 """
 
 from __future__ import annotations
@@ -12,24 +11,17 @@ import asyncio
 import json
 import logging
 import re
+import tempfile
 import time
 from collections.abc import Callable
-from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
+from typing import Literal
 
-import httpx
 from agent_framework import Message
-from pydantic import SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from libraryiq.agent import AgentSettings, Role, build_agent
+from libraryiq.agent import AgentSettings, build_agent, open_library
 
-
-class EvalSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="LIBRARYIQ_", env_file=".env", extra="ignore")
-
-    eval_service_url: str
-    backend_key: SecretStr | None = None
+Role = Literal["requester", "librarian"]
 
 
 HELD_DOI = "10.1056/NEJMoa2034577"
@@ -427,14 +419,6 @@ def parse_turn(response, turn: Turn | None = None) -> Turn:
     return turn
 
 
-async def _service_state(cfg: EvalSettings, path: str, method: str = "GET") -> dict:
-    headers = {"x-backend-key": cfg.backend_key.get_secret_value()} if cfg.backend_key else {}
-    async with httpx.AsyncClient(timeout=30) as http:
-        response = await http.request(method, f"{cfg.eval_service_url}{path}", headers=headers)
-        response.raise_for_status()
-        return response.json()
-
-
 async def _run_step(agent, session, step: Step) -> Turn:
     turn = Turn(role=step.role)
     response = await agent.run(step.text, session=session)
@@ -452,21 +436,21 @@ async def _run_step(agent, session, step: Step) -> Turn:
 
 
 async def run_scenario(
-    scenario: Scenario, settings: AgentSettings, cfg: EvalSettings
+    scenario: Scenario, settings: AgentSettings
 ) -> tuple[Outcome, list[str], float]:
-    await _service_state(cfg, "/_test/reset", "POST")
     started = time.perf_counter()
     steps = [t if isinstance(t, Step) else Step("requester", t) for t in scenario.turns]
     turns: list[Turn] = []
-    async with AsyncExitStack() as stack:
+    with tempfile.TemporaryDirectory() as tmp:
+        library = open_library(settings.model_copy(update={"database_path": f"{tmp}/eval.db"}))
         agents, sessions = {}, {}
         for role in dict.fromkeys(step.role for step in steps):
-            agents[role] = await stack.enter_async_context(build_agent(settings, role))
+            user = settings.librarian if role == "librarian" else settings.requester
+            agents[role] = build_agent(settings, library, user)
             sessions[role] = agents[role].create_session()
         for step in steps:
             turns.append(await _run_step(agents[step.role], sessions[step.role], step))
-    state = await _service_state(cfg, "/_test/state")
-    outcome = Outcome(turns, state["pending"], state["emails"])
+        outcome = Outcome(turns, library.store.count_pending(), len(library.notifier.outbox))
     failures = [msg for check in scenario.checks if (msg := check(outcome))]
     return outcome, failures, time.perf_counter() - started
 
@@ -479,7 +463,7 @@ async def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.ERROR)
 
-    settings, cfg = AgentSettings(), EvalSettings()
+    settings = AgentSettings()
     scenarios = [s for s in SCENARIOS if not args.only or s.name == args.only]
     print(f"model={settings.model} runs={args.runs} scenarios={len(scenarios)}\n")
     failed = 0
@@ -487,12 +471,12 @@ async def main() -> int:
         passes, notes = 0, []
         for _ in range(args.runs):
             try:
-                outcome, failures, seconds = await run_scenario(scenario, settings, cfg)
+                outcome, failures, seconds = await run_scenario(scenario, settings)
             except Exception as exc:  # a connection hiccup should not stop the whole run
                 print(
                     f"    infrastructure error, retrying once: {type(exc).__name__}: {str(exc)[:120]}"
                 )
-                outcome, failures, seconds = await run_scenario(scenario, settings, cfg)
+                outcome, failures, seconds = await run_scenario(scenario, settings)
             if args.verbose:
                 for i, turn in enumerate(outcome.turns, 1):
                     print(

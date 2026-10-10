@@ -135,10 +135,6 @@ class SqliteRequestStore:
                 "SELECT count(*) FROM requests WHERE status = 'pending'"
             ).fetchone()[0]
 
-    def clear(self) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM requests")
-
 
 @dataclass(frozen=True)
 class Message:
